@@ -1,5 +1,5 @@
 # Reinforcement learning 2020 - University of Amsterdam
-## Reproducibility
+## Reproducibility Project
 
 # Contributors:
 - Samantha Biegel
