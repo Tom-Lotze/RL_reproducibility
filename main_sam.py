@@ -66,8 +66,8 @@ class GreedyPolicy(object):
         """   
         
         # Inefficient but kept same structure as below if we change policy later
-        probs = [1 if a == np.argmax(self.Q[s]) else 0 for s,a in zip(states, actions)]
-        
+        probs = [1/(sum(self.Q[s] == max(self.Q[s]))) if Q[s][a] == np.max(self.Q[s]) else 0 for s,a in zip(states, actions)]
+
         return probs
         
     def sample_action(self, obs):
@@ -80,9 +80,8 @@ class GreedyPolicy(object):
         Returns:
             An action (int).
         """
-
         # find out what the max action is
-        best_action = np.argmax(self.Q[obs])
+        best_action = np.where(self.Q[obs] == np.max(self.Q[obs]))[0]
         
         return best_action
 
@@ -97,8 +96,8 @@ class EpsilonGreedyPolicy(object):
         
     def get_probs(self, states, actions):
         # loop over the state action lists and compute probabilities according to eps greedy
-        probs = [1-self.epsilon if a == np.argmax(Q[s]) else self.epsilon/self.Q.shape[0] for s, a in zip(states, actions)]
-                
+#         probs = [(1-self.epsilon)/sum(self.Q[s] == max(self.Q[s])) if Q[s][a] == np.max(self.Q[s]) else self.epsilon/(self.Q.shape[1]-sum(self.Q[s] == max(self.Q[s]))) for s, a in zip(states, actions)]
+        probs = [1 - self.epsilon if a == np.argmax(self.Q[s]) else epsilon/(self.Q.shape[1]-1) for s,a in zip(states, actions)]
         return probs
         
     
@@ -113,12 +112,11 @@ class EpsilonGreedyPolicy(object):
             An action (int).
         """
          
-        best_actions = [i for i, j in enumerate([self.Q[obs][i] for i in range(4)]) 
-                   if j == max([self.Q[obs][i] for i in range(4)])] 
+        actions = np.where(self.Q[obs] == np.max(self.Q[obs]))[0]
         p = np.random.uniform()
         if p > self.epsilon:
             # choose one of the best actions
-            action = np.random.choice(best_actions)
+            action = np.random.choice(actions)
         else:
             # return a random action
             action = np.random.randint(0,4)
@@ -274,18 +272,14 @@ def mc_ordinary_importance_sampling(env, behavior_policy, target_policy, num_epi
     for i in tqdm(range(num_episodes), position=0):
         # update behavioral function:
         behavior_policy = EpsilonGreedyPolicy(Qdefaultdict2array(Q, env.nA, env.nS), epsilon)
-        
         # sample episode with new behavioural function
         states, actions, rewards, dones = sampling_function(env, behavior_policy)
         
         # save the episode length
         episode_lens.append(len(states))
-        
-        # extract target and behavioral probabilities
-        target_probs = target_policy.get_probs(states, actions)
-        behavioral_probs = behavior_policy.get_probs(states, actions)
 
-        G = 0        
+        G = 0
+        ratio = 1
         
         # loop backwards over the trajectory
         for timestep in range(len(states)-1, -1, -1):
@@ -294,14 +288,17 @@ def mc_ordinary_importance_sampling(env, behavior_policy, target_policy, num_epi
             a = actions[timestep]
             G = discount_factor * G + r
             
-            returns_count[s][a] += 1 
+            returns_count[s][a] += 1
+            
+            target_prob = target_policy.get_probs([s], [a])
+            behavioral_prob = behavior_policy.get_probs([s], [a])  
 
-            # compute the ratio using the two probability lists
-            ratio = np.prod([t/b for t, b in zip(target_probs[timestep:], behavioral_probs[timestep:])])
+            # update the weight
+            ratio *= (target_prob[0])/(behavioral_prob[0])
 
             # use every visit incremental method
             Q[s][a] += 1/returns_count[s][a] * (ratio * G - Q[s][a])
-    
+                    
     Q = Qdefaultdict2array(Q, env.nA, env.nS)
     
     return Q, episode_lens
@@ -390,20 +387,19 @@ np.random.seed(42)
 # set other parameters
 epsilon = 0.05
 discount_factor = 1.0
-num_episodes = 40
+num_episodes = 10
 Q = np.zeros((env.nS, env.nA))
-behavioral_policy = EpsilonGreedyPolicy(Q, epsilon=epsilon)
+# behavioral_policy = RandomPolicy(env.nS, env.nA)
+behavioral_policy = EpsilonGreedyPolicy(Q, epsilon)
 target_policy = GreedyPolicy(Q)
 
 # the episode length is equal to the negative return. 
 print(f"Updating Q using ordinary importance sampling ({num_episodes} episodes)")
 Q_mc_ordinary, mc_ordinary_epslengths = mc_ordinary_importance_sampling(env, behavioral_policy, target_policy, 
                                                                         num_episodes, discount_factor, epsilon=epsilon)
-print(f"Updating Q using weighted importance sampling ({num_episodes} episodes)")
-Q_mc_weighted, mc_weighted_epslengths = mc_weighted_importance_sampling(env, behavioral_policy, target_policy,
-                                                                        num_episodes, discount_factor, epsilon=epsilon)
-
-
+# print(f"Updating Q using weighted importance sampling ({num_episodes} episodes)")
+# Q_mc_weighted, mc_weighted_epslengths = mc_weighted_importance_sampling(env, behavioral_policy, target_policy,
+#                                                                         num_episodes, discount_factor, epsilon=epsilon)
 # -
 
 # ## Plotting
@@ -467,8 +463,9 @@ def sarsa_ordinary_importance_sampling(env, behavior_policy, target_policy, num_
             
             # sample action at state s_prime
             a_prime = behavior_policy.sample_action(s_prime)
-            
-            W = (target_policy.get_probs([s],[a])[0])/(behavior_policy.get_probs([s],[a])[0])
+
+            W = (target_policy.get_probs([s_prime],[a_prime])[0])/(behavior_policy.get_probs([s_prime],[a_prime])[0])
+#             print(W)
 
             # update Q 
             Q[s][a] += alpha * W * (r + discount_factor * Q[s_prime][a_prime] - Q[s][a])    
@@ -499,7 +496,7 @@ np.random.seed(42)
 # set other parameters
 epsilon = 0.05
 discount_factor = 1.0
-num_episodes = 40
+num_episodes = 50
 alpha=0.5
 Q = np.zeros((env.nS, env.nA))
 behavioral_policy = EpsilonGreedyPolicy(Q, epsilon=epsilon)
@@ -525,6 +522,8 @@ plt.legend()
 # plt.gca().set_ylim([0, 100])
 plt.show()
 # -
+
+Q_td_ordinary
 
 # ### TO-DO: TD Weighted Importance Sampling (same as above but weighted)
 
