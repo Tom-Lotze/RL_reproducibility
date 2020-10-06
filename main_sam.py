@@ -255,6 +255,7 @@ def Qdefaultdict2array(Q, nA, nS):
             
 
 
+# +
 def mc_ordinary_importance_sampling(env, behavior_policy, target_policy, num_episodes, discount_factor=1.0,
                            sampling_function=sample_episode, epsilon=0.05):
     """
@@ -343,7 +344,7 @@ def mc_weighted_importance_sampling(env, behavior_policy, target_policy, num_epi
                            sampling_function=sample_episode, epsilon=0.05):
     """
     Monte Carlo prediction algorithm. Calculates the value function
-    for a given target policy using behavior policy and ordinary importance sampling.
+    for a given target policy using behavior policy and weighted importance sampling.
     
     Args:
         env: OpenAI gym environment.
@@ -477,7 +478,7 @@ print(f"resulting episode length weighted: {len(weighted_episode[0])}")
 
 # ## Temporal Difference
 #
-# TO-DO: Make N-step
+# To-Do: Check n-step implementation so we can drop the first sarsa
 
 def sarsa_ordinary_importance_sampling(env, behavior_policy, target_policy, num_episodes, discount_factor=1.0, alpha=0.5):
     """
@@ -543,6 +544,94 @@ def sarsa_ordinary_importance_sampling(env, behavior_policy, target_policy, num_
     return Q, (episode_lengths, episode_returns)
 
 
+def n_step_sarsa_ordinary_importance_sampling(env, behavior_policy, target_policy, num_episodes, n=1, discount_factor=1.0, alpha=0.5):
+    """
+    n-step SARSA algorithm: Off-policy TD control. Calculates the value function
+    for a given target policy using behavior policy and ordinary importance sampling.
+    
+    Args:
+        env: OpenAI environment.
+        policy: A policy which allows us to sample actions with its sample_action method.
+        Q: Q value function, numpy array Q[s,a] -> state-action value.
+        num_episodes: Number of episodes to run for.
+        n: number of steps
+        discount_factor: Gamma discount factor.
+        alpha: TD learning rate.
+        
+    Returns:
+        A tuple (Q, stats).
+        Q is a numpy array Q[s,a] -> state-action value.
+        stats is a list of tuples giving the episode lengths and returns.
+    """
+    
+    # Keep track of useful statistics
+    stats = []
+    
+    Q = np.ones((env.nS, env.nA)) * -100
+    
+    for i_episode in tqdm(range(num_episodes)):
+        i = 0
+        R = 0
+        
+        behavior_policy.Q = Q
+        target_policy.Q = Q
+        
+        s = defaultdict(lambda: defaultdict(float))
+        a = defaultdict(lambda: defaultdict(float))
+        r = defaultdict(lambda: defaultdict(float))
+            
+        s[0] = env.reset()
+        a[0] = behavior_policy.sample_action(s[0])
+        
+        T = np.inf
+        t = 0
+        while True:
+            if t < T:
+                # Take action
+                s[t+1], r[t+1], final_state, _ = env.step(a[t])
+                R += r[t+1]
+                i += 1
+                
+                if final_state:
+                    T = t + 1
+                else:
+                    # Sample action from next state
+                    a[t+1] = behavior_policy.sample_action(s[t+1])
+            
+            tau = t - n + 1
+            
+            if tau >= 0:
+                # Collect states and actions included in ratio
+                last_step_rho = min([tau + n, T - 1])
+                first_step = tau + 1
+                states = [value for key, value in s.items() if key in range(first_step, last_step_rho+1)]
+                actions = [value for key, value in a.items() if key in range(first_step, last_step_rho+1)]
+                
+                # n-step importance sampling ratio
+                rho = np.prod([(target_policy.get_probs([state],[action]))/(behavior_policy.get_probs([state],[action])) for state, action in zip(states, actions)])
+                
+                # n-step return
+                last_step_G = min([tau + n, T])
+                G = np.sum([discount_factor**(i - tau - 1) * r[i] for i in range(first_step, last_step_G)])
+                if tau + n < T:
+                    G += discount_factor**n * Q[s[tau+n]][a[tau+n]]
+
+                # Update Q 
+                Q[s[tau]][a[tau]] += alpha * rho * (G - Q[s[tau]][a[tau]])
+
+            if tau == T - 1:
+                break
+                         
+            t += 1
+
+        stats.append((i, R))
+        
+    Q = Qdefaultdict2array(Q, env.nA, env.nS)
+        
+    episode_lengths, episode_returns = zip(*stats)
+    return Q, (episode_lengths, episode_returns)
+
+
 # +
 # Reproducible
 np.random.seed(42)
@@ -550,27 +639,34 @@ np.random.seed(42)
 # set other parameters
 epsilon = 0.05
 discount_factor = 1.0
-num_episodes = 5000
+num_episodes = 100
 alpha=0.5
-Q = np.zeros((env.nS, env.nA))
+Q = np.ones((env.nS, env.nA)) * -100
 behavioral_policy = EpsilonGreedyPolicy(Q, epsilon=epsilon)
 target_policy = GreedyPolicy(Q)
 
+# # the episode length is equal to the negative return. 
+# print(f"Updating Q using ordinary importance sampling ({num_episodes} episodes)")
+# Q_td_ordinary, td_ordinary_epsstats = sarsa_ordinary_importance_sampling(env, behavioral_policy, target_policy, 
+#                                                                         num_episodes, discount_factor, alpha)
+
+n=4
 # the episode length is equal to the negative return. 
 print(f"Updating Q using ordinary importance sampling ({num_episodes} episodes)")
-Q_td_ordinary, td_ordinary_epsstats = sarsa_ordinary_importance_sampling(env, behavioral_policy, target_policy, 
-                                                                        num_episodes, discount_factor, alpha)
-
+Q_td_nstep_ordinary, td_nstep_ordinary_epsstats = n_step_sarsa_ordinary_importance_sampling(env, behavioral_policy, target_policy, 
+                                                                        num_episodes, n, discount_factor, alpha)
 
 # +
-def running_mean(vals, n=1):
-    assert n < len(vals)
-    cumvals = np.array(vals).cumsum()
-    return (cumvals[n:] - cumvals[:-n]) / n 
+import plotly.graph_objects as go
 
 n = 5
 
-plt.plot(running_mean(td_ordinary_epsstats[0], n), label="ordinary")
+rm = running_mean(td_nstep_ordinary_epsstats[0], n)
+
+# fig = go.Figure(go.Scatter(x=list(range(len(rm))), y=rm))
+# fig.show()
+
+plt.plot(rm, label="ordinary")
 plt.title('Episode lengths TD')
 plt.legend()
 # plt.gca().set_ylim([0, 100])
