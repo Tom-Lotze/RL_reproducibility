@@ -18,6 +18,8 @@
 # +
 import numpy as np
 from collections import defaultdict
+import pandas as pd
+import plotly.graph_objects as go
 from tqdm import tqdm as _tqdm
 
 def tqdm(*args, **kwargs):
@@ -31,19 +33,26 @@ import time
 assert sys.version_info[:3] >= (3, 6, 0), "Make sure you have Python 3.6 installed!"
 # -
 
-# ## Environment: Windy gridworld
-# Gives a reward of -1 for each step taken, while the final state is not reached
+# ## Environment
 
 # +
 from windy_gridworld import WindyGridworldEnv
 env = WindyGridworldEnv()
 # env??
+
+# import gym
+# env = gym.envs.make("FrozenLake-v0")
+# env.env.__init__(is_slippery=False)
 # -
 
+try:
+    env.nA = env.env.nA
+    env.nS = env.env.nS
+except:
+    pass
+
+
 # ## Policy
-#
-# ### Target policy (choose greedy vs non-greedy)
-# Greedy policy 
 
 class GreedyPolicy(object):
     """
@@ -88,7 +97,6 @@ class GreedyPolicy(object):
         best_action = np.random.choice([i for i, j in enumerate(self.Q[obs]) if j == np.max(self.Q[obs])])
         
         return best_action
-        
 
 
 class EpsilonGreedyPolicy(object):
@@ -135,56 +143,7 @@ class EpsilonGreedyPolicy(object):
         return action
 
 
-
-# ### Behavioural policy
-# Random policy from blackjack lab. 
-# TODO: experiment with behavioural policies to check which yield interesting results
-
-class RandomPolicy(object):
-    """
-    A behavioural policy
-    """
-    def __init__(self, nS, nA):
-        self.probs = np.ones((nS, nA)) * 1/nA
-        
-    def get_probs(self, states, actions):
-        """
-        This method takes a list of states and a list of actions and returns a numpy array that contains 
-        a probability of perfoming action in given state for every corresponding state action pair. 
-
-        Args:
-            states: a list of states.
-            actions: a list of actions.
-
-        Returns:
-            Numpy array filled with probabilities (same length as states and actions)
-        """        
-        probs = [self.probs[s,a] for s,a in zip(states, actions)]
-        
-        return probs
-
-    
-    def sample_action(self, state):
-        """
-        This method takes a state as input and returns an action sampled from this policy.  
-
-        Args:
-            state: current state
-
-        Returns:
-            An action (int).
-        """
-        p_s = self.probs[state]
-        
-        return np.random.choice(range(0,self.probs.shape[1]), p=p_s)
-
-random_policy = RandomPolicy(env.nS, env.nA)
-
-
 # ## Monte Carlo
-
-# ## Sampling function given an env and policy
-# Function to sample an episode from the env.
 
 def sample_episode(env, policy):
     """
@@ -223,13 +182,6 @@ def sample_episode(env, policy):
 
     return states, actions, rewards, dones
 
-# check the length of episodes that are generated for random policy
-for episode in range(1):
-    trajectory_data = sample_episode(env, random_policy)
-#     print("Episode {}:\nStates {}\nActions {}\nRewards {}\nDones {}\n".format(episode,*trajectory_data))
-    print(f"length of episode {episode}: {len(trajectory_data[0])}")
-
-
 # +
 # check the length of episodes that are generated for eps greedy policy
 Q = np.zeros((env.nS, env.nA))
@@ -243,8 +195,7 @@ for episode in range(1):
 
 # -
 
-# ## MC Ordinary Importance Sampling (make it work for windy gridworld)
-# Status: updated to update Q instead of V
+# ## MC Ordinary Importance Sampling
 
 def Qdefaultdict2array(Q, nA, nS):
     Q_np = np.zeros((nS, nA))
@@ -252,14 +203,13 @@ def Qdefaultdict2array(Q, nA, nS):
         for A in range(nA):
             Q_np[S][A] = Q[S][A]
     return Q_np
-            
 
 
-# +
-def mc_ordinary_importance_sampling(env, behavior_policy, target_policy, num_episodes, discount_factor=1.0,
-                           sampling_function=sample_episode, epsilon=0.05):
+def mc_importance_sampling(env, behavior_policy, target_policy, num_episodes, weighted=False, discount_factor=1.0,
+                           sampling_function=sample_episode, epsilon=0.05, seed=42, 
+                           analyse_states=[(0,2), (0,1), (14,2), (2,1), (8,2)]):
     """
-    Monte Carlo prediction algorithm. Calculates the value function
+    Monte Carlo prediction algorithm. Calculates the Q function
     for a given target policy using behavior policy and ordinary importance sampling.
     
     Args:
@@ -267,180 +217,110 @@ def mc_ordinary_importance_sampling(env, behavior_policy, target_policy, num_epi
         behavior_policy: A policy used to collect the data.
         target_policy: A policy which value function we want to estimate.
         num_episodes: Number of episodes to sample.
+        weighted: Boolean flag to use weighted or ordinary importance sampling.
         discount_factor: Gamma discount factor.
         sampling_function: Function that generates data from one episode.
     
     Returns:
-        A dictionary that maps from state -> value.
-        The state is a tuple and the value is a float.
+        A dictionary that maps from (state, action) -> value.
     """
 
-    # Keeps track of current V and count of returns for each state
-    # to calculate an update.
-#     Q = defaultdict(lambda: defaultdict(float))
-    Q = np.ones((env.nS, env.nA)) * -100
-    returns_count = defaultdict(lambda: defaultdict(float))
+    # set the current Q to a large negative value
+    Q = np.zeros((env.nS, env.nA))
+    if weighted:
+        C = np.zeros((env.nS, env.nA))
+    else:
+        returns_count = defaultdict(lambda: defaultdict(float))
     
     episode_lens = []
     
+    # set seed
+    np.random.seed(seed)
+    
+    analysis_values = dict((k,[]) for k in analyse_states)
+    
     # sample episodes
     for i in tqdm(range(num_episodes), position=0):
-        # update behavioral function:
-#         behavior_policy = EpsilonGreedyPolicy(Qdefaultdict2array(Q, env.nA, env.nS), epsilon)
+        # update behavioral and target policy
         behavior_policy.Q = Q
-#         target_policy = GreedyPolicy(Qdefaultdict2array(Q, env.nA, env.nS))
         target_policy.Q = Q        
     
         # sample episode with new behavioural function
         states, actions, rewards, dones = sampling_function(env, behavior_policy)
         
         # save the episode length
-        episode_lens.append(len(states))
-        
-        # extract target and behavioral probabilities
-#         target_probs = target_policy.get_probs(states, actions)
-#         behavioral_probs = behavior_policy.get_probs(states, actions)
-#         target_probs = [target_policy.get_probs(states[t], actions[t]) for t in range(len(states))]
-#         behavioral_probs = [behavioral_policy.get_probs(states[t], actions[t]) for t in range(len(states))]
-            
+        episode_lens.append(len(states)) 
 
         G = 0        
         W = 1
         
         # loop backwards over the trajectory
         for i, timestep in enumerate(range(len(states)-1, -1, -1)):
-#             print(i)
             s = states[timestep]
             r = rewards[timestep]
             a = actions[timestep]
             G = discount_factor * G + r
-            
-            returns_count[s][a] += 1 
+                        
+            if weighted:
+                # add W to the sum of weights C
+                C[s][a] += W
+                Q[s][a] += W/C[s][a] * (G - Q[s][a])
+            else:
+                returns_count[s][a] += 1 
+                # use every visit incremental method
+                Q[s][a] += 1/returns_count[s][a] * W * (G - Q[s][a])
 
-            # compute the ratio using the two probability lists
-#             ratio = np.prod([t/b for t, b in zip(target_probs[timestep:], behavioral_probs[timestep:])])
-            
-            # use every visit incremental method
-            Q[s][a] += 1/returns_count[s][a] * (W * G - Q[s][a])
-            
-            W *= (target_policy.get_probs(s, a)) / (behavior_policy.get_probs(s, a))
-            
+            W *= (target_policy.get_probs(s, a)) / (behavior_policy.get_probs(s, a))        
+
             if W == 0:
                 break
-    
-#     Q = Qdefaultdict2array(Q, env.nA, env.nS)
-    
-    return Q, episode_lens
 
-
-# -
-
-# ### MC: Weighted Importance Sampling
-#
-# ##### (TODO: Eventually: merge the two functions into one with a weighted flag)
-
-# +
-def mc_weighted_importance_sampling(env, behavior_policy, target_policy, num_episodes, discount_factor=1.0,
-                           sampling_function=sample_episode, epsilon=0.05):
-    """
-    Monte Carlo prediction algorithm. Calculates the value function
-    for a given target policy using behavior policy and weighted importance sampling.
-    
-    Args:
-        env: OpenAI gym environment.
-        behavior_policy: A policy used to collect the data.
-        target_policy: A policy which value function we want to estimate.
-        num_episodes: Number of episodes to sample.
-        discount_factor: Gamma discount factor.
-        sampling_function: Function that generates data from one episode.
-    
-    Returns:
-        A dictionary that maps from state -> value.
-        The state is a tuple and the value is a float.
-    """
-
-    # create a matrix defaultdict for the Q function and the sum of weights C
-#     Q = defaultdict(lambda: defaultdict(float))
-    Q = np.ones((env.nS, env.nA)) * -100
-    C = defaultdict(lambda: defaultdict(float))
-    
-    episode_lens = []
-    
-    # sample episodes
-    for i in tqdm(range(num_episodes), position=0):
-        # update behavioral function:
-#         behavior_policy = EpsilonGreedyPolicy(Qdefaultdict2array(Q, env.nA, env.nS), epsilon)
-        behavior_policy.Q = Q
-#         target_policy = GreedyPolicy(Qdefaultdict2array(Q, env.nA, env.nS))
-        target_policy.Q = Q
-        # sample episode with new behavioural function
-        states, actions, rewards, dones = sampling_function(env, behavior_policy)
-        
-        # save episode lengths
-        episode_lens.append(len(states))
-        
-        # extract target and behavioral probabilities OLD
-#         target_probs = target_policy.get_probs(states, actions)
-#         behavioral_probs = behavior_policy.get_probs(states, actions)
-       
-        # print(Qdefaultdict2array(Q, env.nA, env.nS))
-#         print(target_probs)
-        
-        
-        # initialize the return and the weight
-        G = 0
-        W = 1
-        
-        # loop backwards over the trajectory
-        for i, timestep in enumerate(range(len(states)-1, -1, -1)): 
-#             print(i)
-            # extract info of current timestep from trajectory    
-            s = states[timestep]
-            r = rewards[timestep]
-            a = actions[timestep]
-            G = discount_factor * G + r
+        # store state values to analyse
+        for (s,a) in analyse_states:
+#             print(Q[s][a])
+            analysis_values[(s,a)].append(Q[s][a])
             
-            # add W to the sum of weights C
-            C[s][a] += W
-            
-            # update Q function incrementally
-            Q[s][a] += W/C[s][a] * (G - Q[s][a])
-            
-            # update the weight
-            # W *= (target_probs[timestep])/(behavioral_probs[timestep])
-            W *= (target_policy.get_probs(s, a)) / (behavior_policy.get_probs(s, a))
-            
-            # break out of the loop if the weights are 0
-            if W == 0:
-                break
-    
-#     Q = Qdefaultdict2array(Q, env.nA, env.nS)     
-    
-    return Q, episode_lens
-# -
+    return Q, episode_lens, analysis_values
+
 
 # ## Performance
-# Plot the episode length over training
 
 # +
 # Reproducible
-np.random.seed(42)
+seed = 42
 
 # set other parameters
 epsilon = 0.1
-discount_factor = 1.0
-num_episodes = 5000
-Q = np.ones((env.nS, env.nA)) * -100
+gamma = 0.99
+num_episodes = 1000
+Q = np.zeros((env.nS, env.nA))
 behavioral_policy = EpsilonGreedyPolicy(Q, epsilon=epsilon)
 target_policy = GreedyPolicy(Q)
 
 # the episode length is equal to the negative return. 
 print(f"Updating Q using ordinary importance sampling ({num_episodes} episodes)")
-Q_mc_ordinary, mc_ordinary_epslengths = mc_ordinary_importance_sampling(env, behavioral_policy, target_policy, 
-                                                                        num_episodes, discount_factor, epsilon=epsilon)
+Q_mc_ordinary, mc_ordinary_epslengths, mc_analysis_ordinary = mc_importance_sampling(env,
+                                                               behavioral_policy, target_policy, 
+                                                               num_episodes, weighted=False,discount_factor=gamma, 
+                                                               epsilon=epsilon, seed=seed)
+
 print(f"Updating Q using weighted importance sampling ({num_episodes} episodes)")
-Q_mc_weighted, mc_weighted_epslengths = mc_weighted_importance_sampling(env, behavioral_policy, target_policy,
-                                                                        num_episodes, discount_factor, epsilon=epsilon)
+Q_mc_weighted, mc_weighted_epslengths, mc_analysis_weighted = mc_importance_sampling(env,
+                                                               behavioral_policy, target_policy,
+                                                               num_episodes, weighted=True, discount_factor=gamma, 
+                                                               epsilon=epsilon, seed=seed)
+
+
+# +
+# check how long an episode takes under the found Q function
+mc_greedy_ordinary = GreedyPolicy(Q_mc_ordinary)
+mc_greedy_weighted = GreedyPolicy(Q_mc_weighted)
+
+mc_ordinary_episode = sample_episode(env, mc_greedy_ordinary)
+mc_weighted_episode = sample_episode(env, mc_greedy_weighted)
+
+print(f"resulting episode length ordinary: {len(mc_ordinary_episode[0])}")
+print(f"resulting episode length weighted: {len(mc_weighted_episode[0])}")
 
 
 # -
@@ -453,25 +333,17 @@ def running_mean(vals, n=1):
     cumvals = np.array(vals).cumsum()
     return (cumvals[n:] - cumvals[:-n]) / n 
 
+# set smoothing factor
 n = 5
 
 plt.plot(running_mean(mc_ordinary_epslengths, n), label="ordinary")
 plt.plot(running_mean(mc_weighted_epslengths, n), label="weighted")
+# plt.hlines(num_episodes)
 plt.title('Episode lengths MC')
+# plt.yscale("log")
 plt.legend()
 # plt.gca().set_ylim([0, 100])
 plt.show()
-
-# +
-# check how long an episode takes under the found Q function
-greedy_ordinary = GreedyPolicy(Q_mc_ordinary)
-greedy_weighted = GreedyPolicy(Q_mc_weighted)
-
-ordinary_episode = sample_episode(env, greedy_ordinary)
-weighted_episode = sample_episode(env, greedy_weighted)
-
-print(f"resulting episode length ordinary: {len(ordinary_episode[0])}")
-print(f"resulting episode length weighted: {len(weighted_episode[0])}")
 
 
 # -
@@ -480,7 +352,70 @@ print(f"resulting episode length weighted: {len(weighted_episode[0])}")
 #
 # To-Do: Check n-step implementation so we can drop the first sarsa
 
-def sarsa_ordinary_importance_sampling(env, behavior_policy, target_policy, num_episodes, discount_factor=1.0, alpha=0.5):
+# +
+# def sarsa_ordinary_importance_sampling(env, behavior_policy, target_policy, num_episodes, discount_factor=1.0, alpha=0.5):
+#     """
+#     SARSA algorithm: Off-policy TD control. Calculates the value function
+#     for a given target policy using behavior policy and ordinary importance sampling.
+    
+#     Args:
+#         env: OpenAI environment.
+#         policy: A policy which allows us to sample actions with its sample_action method.
+#         Q: Q value function, numpy array Q[s,a] -> state-action value.
+#         num_episodes: Number of episodes to run for.
+#         discount_factor: Gamma discount factor.
+#         alpha: TD learning rate.
+        
+#     Returns:
+#         A tuple (Q, stats).
+#         Q is a numpy array Q[s,a] -> state-action value.
+#         stats is a list of tuples giving the episode lengths and returns.
+#     """
+    
+#     # Keep track of useful statistics
+#     stats = []
+    
+#     Q = np.zeros((env.nS, env.nA))
+    
+#     for i_episode in tqdm(range(num_episodes)):
+#         i = 0
+#         R = 0
+        
+#         behavior_policy.Q = Q
+#         target_policy.Q = Q
+            
+#         s = env.reset()
+#         a = behavior_policy.sample_action(s)
+        
+#         while True:
+#             # Take action
+#             s_prime, r, final_state, _ = env.step(a)
+            
+#             # Sample action at from next state
+#             a_prime = behavior_policy.sample_action(s_prime)
+            
+#             # Update weight
+#             W = (target_policy.get_probs([s_prime],[a_prime]))/(behavior_policy.get_probs([s_prime],[a_prime]))
+
+#             # Update Q 
+#             Q[s][a] += alpha * W * (r + discount_factor * Q[s_prime][a_prime] - Q[s][a])    
+            
+#             s = s_prime
+#             a = a_prime
+            
+#             R += r
+#             i += 1 
+            
+#             if final_state:
+#                 break
+            
+#         stats.append((i, R))
+                
+#     episode_lengths, episode_returns = zip(*stats)
+#     return Q, (episode_lengths, episode_returns)
+
+# +
+def sarsa_importance_sampling(env, behavior_policy, target_policy, num_episodes, weighted=False, discount_factor=1.0, alpha=0.5):
     """
     SARSA algorithm: Off-policy TD control. Calculates the value function
     for a given target policy using behavior policy and ordinary importance sampling.
@@ -500,13 +435,17 @@ def sarsa_ordinary_importance_sampling(env, behavior_policy, target_policy, num_
     """
     
     # Keep track of useful statistics
-    stats = []
+    num_steps = []
     
-    Q = np.ones((env.nS, env.nA)) * -100
+    Q = np.zeros((env.nS, env.nA))
+    C = np.zeros((env.nS, env.nA))
+    Q_dict = {}
     
     for i_episode in tqdm(range(num_episodes)):
         i = 0
         R = 0
+        
+        W = 1
         
         behavior_policy.Q = Q
         target_policy.Q = Q
@@ -523,27 +462,115 @@ def sarsa_ordinary_importance_sampling(env, behavior_policy, target_policy, num_
             
             # Update weight
             W = (target_policy.get_probs([s_prime],[a_prime]))/(behavior_policy.get_probs([s_prime],[a_prime]))
+#             print(" ")
+#             print(final_state)
+#             print(W)
+#             print((target_policy.get_probs([s],[a]))/(behavior_policy.get_probs([s],[a])))
 
+#             if final_state:
+#                 W = 1
+            if W == 0:
+                break
+            
+            if weighted:
+#                 C[s][a] = W# + (target_policy.get_probs([s],[a]))/(behavior_policy.get_probs([s],[a]))
+                Q[s][a] += alpha * (r + discount_factor * Q[s_prime][a_prime] - Q[s][a])
+            else:
+#                 C[s][a] = 1
+                Q[s][a] += alpha * W * (r + discount_factor * Q[s_prime][a_prime] - Q[s][a]) 
+#             print(C)
+            
+#             if C[s][a] == 0:
+#                 break
+                
             # Update Q 
-            Q[s][a] += alpha * W * (r + discount_factor * Q[s_prime][a_prime] - Q[s][a])    
+#             Q[s][a] += alpha * W/C[s][a] * (r + discount_factor * Q[s_prime][a_prime] - Q[s][a])   
+            
             
             s = s_prime
             a = a_prime
             
-            R += r
             i += 1 
             
             if final_state:
                 break
             
-        stats.append((i, R))
-        
-    Q = Qdefaultdict2array(Q, env.nA, env.nS)
-        
-    episode_lengths, episode_returns = zip(*stats)
-    return Q, (episode_lengths, episode_returns)
+        num_steps.append(i)
+        Q_dict[i_episode] = Q.flatten()
+                
+    return Q, num_steps, Q_dict
+
+# +
+# set other parameters
+epsilon = 0.05
+gamma=0.99
+num_episodes = 5000
+alpha=0.5
+Q = np.zeros((env.nS, env.nA))
+behavioral_policy = EpsilonGreedyPolicy(Q, epsilon=epsilon)
+target_policy = GreedyPolicy(Q)
+
+print(f"Updating Q using ordinary importance sampling ({num_episodes} episodes)")
+Q_td_ordinary, td_ordinary_steps, _ = sarsa_importance_sampling(env, behavioral_policy, target_policy,
+                                                                        num_episodes, False, gamma, alpha)
+
+print(f"Updating Q using weighted importance sampling ({num_episodes} episodes)")
+Q_td_weighted, td_weighted_steps, _ = sarsa_importance_sampling(env, behavioral_policy, target_policy,
+                                                                        num_episodes, True, gamma, alpha)
+# -
+
+Q_td_ordinary
+
+fig = go.Figure(go.Scatter(x=list(range(num_episodes)), y=td_ordinary_steps, name="ordinary"))
+fig.add_trace(go.Scatter(y=td_weighted_steps, name="weighted"))
+fig.update_layout(title_text="Episode lengths TD", template="plotly_white", yaxis_title="Length", xaxis_title="Number of episodes")
+fig.show()
+
+# +
+# check how long an episode takes under the found Q function
+greedy_ordinary = GreedyPolicy(Q_td_ordinary)
+greedy_weighted = GreedyPolicy(Q_td_weighted)
+
+ordinary_episode = sample_episode(env, greedy_ordinary)
+weighted_episode = sample_episode(env, greedy_weighted)
+
+print(f"resulting episode length ordinary: {len(ordinary_episode[0])}")
+print(f"resulting episode length weighted: {len(weighted_episode[0])}")
+
+# +
+num_episodes = 5000
+
+fig = go.Figure()
+n_runs = 5
+for i in range(n_runs):
+    _, _, Q_dict = sarsa_importance_sampling(env, behavioral_policy, target_policy,
+                                                                        num_episodes, True, gamma, alpha)
+    Q_df = pd.DataFrame.from_dict(Q_dict, orient="index")
+    fig.add_trace(go.Scatter(x=Q_df.index, y=Q_df[20], name="run " + str(i)))
+
+fig.update_layout(title_text="Sarsa weighted importance sampling", template="plotly_white", yaxis_title="Q(0,0)", xaxis_title="Number of episodes")
+fig.show()
+
+# +
+num_episodes = 5000
+
+fig = go.Figure()
+n_runs = 5
+for i in range(n_runs):
+    _, _, Q_dict = sarsa_importance_sampling(env, behavioral_policy, target_policy,
+                                                                        num_episodes, False, gamma, alpha)
+    Q_df = pd.DataFrame.from_dict(Q_dict, orient="index")
+    fig.add_trace(go.Scatter(x=Q_df.index, y=Q_df[20], name="run " + str(i)))
+    
+fig.update_layout(title_text="Sarsa ordinary importance sampling", template="plotly_white", yaxis_title="Q(0,0)", xaxis_title="Number of episodes")  
+fig.show()
 
 
+# -
+
+# ## N-step TD importance sampling
+
+# +
 def n_step_sarsa_ordinary_importance_sampling(env, behavior_policy, target_policy, num_episodes, n=1, discount_factor=1.0, alpha=0.5):
     """
     n-step SARSA algorithm: Off-policy TD control. Calculates the value function
@@ -567,7 +594,8 @@ def n_step_sarsa_ordinary_importance_sampling(env, behavior_policy, target_polic
     # Keep track of useful statistics
     stats = []
     
-    Q = np.ones((env.nS, env.nA)) * -100
+#     Q = np.ones((env.nS, env.nA)) * -100
+    Q = np.zeros((env.nS, env.nA))
     
     for i_episode in tqdm(range(num_episodes)):
         i = 0
@@ -615,7 +643,7 @@ def n_step_sarsa_ordinary_importance_sampling(env, behavior_policy, target_polic
                 G = np.sum([discount_factor**(i - tau - 1) * r[i] for i in range(first_step, last_step_G)])
                 if tau + n < T:
                     G += discount_factor**n * Q[s[tau+n]][a[tau+n]]
-
+                    
                 # Update Q 
                 Q[s[tau]][a[tau]] += alpha * rho * (G - Q[s[tau]][a[tau]])
 
@@ -632,61 +660,144 @@ def n_step_sarsa_ordinary_importance_sampling(env, behavior_policy, target_polic
     return Q, (episode_lengths, episode_returns)
 
 
+# -
+
+def n_step_sarsa_weighted_importance_sampling(env, behavior_policy, target_policy, num_episodes, n=1, discount_factor=1.0, alpha=0.5):
+    """
+    SARSA algorithm: Off-policy TD control. Calculates the value function
+    for a given target policy using behavior policy and ordinary importance sampling.
+    
+    Args:
+        env: OpenAI environment.
+        target policy: A policy which allows us to sample actions with its sample_action method.
+        behaviour policy: A policy which allows us to sample actions with its sample_action method.
+        Q: Q value function, numpy array Q[s,a] -> state-action value.
+        num_episodes: Number of episodes to run for.
+        discount_factor: Gamma discount factor.
+        alpha: TD learning rate.
+        
+    Returns:
+        A tuple (Q, stats).
+        Q is a numpy array Q[s,a] -> state-action value.
+        stats is a list of tuples giving the episode lengths and returns.
+    """
+    
+    # Keep track of useful statistics
+    stats = []
+    
+    Q = np.zeros((env.nS, env.nA))
+    C = np.zeros((env.nS, env.nA))
+    
+    for i_episode in tqdm(range(num_episodes)):
+        i = 0
+        R = 0
+        
+        behavior_policy.Q = Q
+        target_policy.Q = Q
+    
+        s = defaultdict(lambda: defaultdict(float))
+        a = defaultdict(lambda: defaultdict(float))
+        r = defaultdict(lambda: defaultdict(float))
+
+        s[0] = env.reset()
+        a[0] = behavior_policy.sample_action(s[0])
+
+        T = np.inf
+        t = 0
+        while True:
+            if t < T:
+                # Take action
+                s[t+1], r[t+1], final_state, _ = env.step(a[t])
+                R += r[t+1]
+                i += 1
+
+                if final_state:
+                    T = t + 1
+                else:
+                    # Sample action from next state
+                    a[t+1] = behavior_policy.sample_action(s[t+1])
+
+            tau = t - n + 1
+
+            if tau >= 0:
+                # Collect states and actions included in ratio
+                last_step_rho = min([tau + n, T - 1])
+                first_step = tau + 1
+                states = [value for key, value in s.items() if key in range(first_step, last_step_rho+1)]
+                actions = [value for key, value in a.items() if key in range(first_step, last_step_rho+1)]
+
+                # n-step importance sampling ratio
+                rho = np.prod([(target_policy.get_probs([state],[action]))/(behavior_policy.get_probs([state],[action])) for state, action in zip(states, actions)])
+
+                # n-step return
+                last_step_G = min([tau + n, T])
+                G = np.sum([discount_factor**(i - tau - 1) * r[i] for i in range(first_step, last_step_G)])
+                if tau + n < T:
+                    G += discount_factor**n * Q[s[tau+n]][a[tau+n]]
+                    
+                C[s[tau]][a[tau]] += rho
+#                 Q[s][a] += W/C[s][a] * (G - Q[s][a])
+                # Update Q - for weigted sampling rho/rho is 1
+                Q[s[tau]][a[tau]] += alpha * rho/C[s[tau]][a[tau]] * (G - Q[s[tau]][a[tau]])
+
+            if tau == T - 1:
+                break
+
+            t += 1
+
+        stats.append((i, R))
+        
+    episode_lengths, episode_returns = zip(*stats)
+    return Q, (episode_lengths, episode_returns)
+
+
 # +
 # Reproducible
 np.random.seed(42)
 
 # set other parameters
 epsilon = 0.05
-discount_factor = 1.0
-num_episodes = 100
+discount_factor = 0.99
+num_episodes = 10
 alpha=0.5
-Q = np.ones((env.nS, env.nA)) * -100
+Q = np.zeros((env.nS, env.nA))
 behavioral_policy = EpsilonGreedyPolicy(Q, epsilon=epsilon)
 target_policy = GreedyPolicy(Q)
 
-# # the episode length is equal to the negative return. 
-# print(f"Updating Q using ordinary importance sampling ({num_episodes} episodes)")
-# Q_td_ordinary, td_ordinary_epsstats = sarsa_ordinary_importance_sampling(env, behavioral_policy, target_policy, 
-#                                                                         num_episodes, discount_factor, alpha)
-
-n=4
-# the episode length is equal to the negative return. 
-print(f"Updating Q using ordinary importance sampling ({num_episodes} episodes)")
+n=1
+print(f"Updating Q using weighted importance sampling ({num_episodes} episodes)")
 Q_td_nstep_ordinary, td_nstep_ordinary_epsstats = n_step_sarsa_ordinary_importance_sampling(env, behavioral_policy, target_policy, 
+                                                                        num_episodes, n, discount_factor, alpha)
+print(f"Updating Q using weighted importance sampling ({num_episodes} episodes)")
+Q_td_nstep_weighted, td_nstep_weighted_epsstats = n_step_sarsa_weighted_importance_sampling(env, behavioral_policy, target_policy, 
                                                                         num_episodes, n, discount_factor, alpha)
 
 # +
-import plotly.graph_objects as go
+# check how long an episode takes under the found Q function
+greedy_weighted_nstep = GreedyPolicy(Q_td_nstep_weighted)
+
+weighted_episode_nstep = sample_episode(env, greedy_weighted_nstep)
+
+print(f"resulting episode length ordinary nstep: {len(weighted_episode_nstep[0])}")
+
+# +
 
 n = 5
 
-rm = running_mean(td_nstep_ordinary_epsstats[0], n)
+rm = running_mean(td_nstep_weighted_epsstats[0], n)
 
 # fig = go.Figure(go.Scatter(x=list(range(len(rm))), y=rm))
 # fig.show()
 
-plt.plot(rm, label="ordinary")
+plt.plot(rm, label="weighted")
 plt.title('Episode lengths TD')
 plt.legend()
 # plt.gca().set_ylim([0, 100])
 plt.show()
-
-# +
-# check how long an episode takes under the found Q function
-greedy_ordinary = GreedyPolicy(Q_td_ordinary)
-
-ordinary_episode = sample_episode(env, greedy_ordinary)
-
-print(f"resulting episode length ordinary: {len(ordinary_episode[0])}")
-# -
-
-# ### TO-DO: TD Weighted Importance Sampling (same as above but weighted)
-
-# +
-## TD weighted importance sampling
 # -
 
 # ## Experiments
+
+
 
 
