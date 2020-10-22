@@ -24,7 +24,7 @@ class GridworldEnv(discrete.DiscreteEnv):
         new_position = self._limit_coordinates(new_position).astype(int)
         new_state = np.ravel_multi_index(tuple(new_position), self.shape)
         is_done = tuple(new_position) == (4, 4)
-        r = 1 if is_done else 0
+        r = 1.0 if is_done else 0.0
         return [(1.0, new_state, r, is_done)]
 
     def __init__(self):
@@ -41,8 +41,13 @@ class GridworldEnv(discrete.DiscreteEnv):
         # Calculate transition probabilities
         P = {}
         for s in range(nS):
-            position = np.unravel_index(s, self.shape)
             P[s] = { a : [] for a in range(nA) }
+            if s == 24:
+                for i in range(4):
+                    P[s][i] = [(1.0, s, 0.0, True)]
+                continue
+            position = np.unravel_index(s, self.shape)
+
             P[s][UP] = self._calculate_transition_prob(position, [-1, 0], winds)
             P[s][RIGHT] = self._calculate_transition_prob(position, [0, 1], winds)
             P[s][DOWN] = self._calculate_transition_prob(position, [1, 0], winds)

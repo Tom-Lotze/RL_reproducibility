@@ -33,7 +33,7 @@ MAPS = {
         "HFFFF",
         "FFHFG"
     ],
-    
+
     "8x8": [
         "SFFFFFFF",
         "FFFFFFFF",
@@ -146,11 +146,11 @@ class FrozenLakeEnv(discrete.DiscreteEnv):
             done = bytes(newletter) in b'GH'
             # reward = float(newletter == b'G')
             if newletter == b'G':
-                reward = float(1)
+                reward = 1.0
             elif newletter == b'H':
-                reward = float(0)
+                reward = 0.0
             else:
-                reward = float(0)
+                reward = 0.0
             return newstate, reward, done
 
         for row in range(nrow):
@@ -160,7 +160,7 @@ class FrozenLakeEnv(discrete.DiscreteEnv):
                     li = P[s][a]
                     letter = desc[row, col]
                     if letter in b'GH':
-                        li.append((1.0, s, 0, True))
+                        li.append((1.0, s, 0.0, True))
                     else:
                         if is_slippery:
                             for b in [(a - 1) % 4, a, (a + 1) % 4]:
@@ -170,7 +170,7 @@ class FrozenLakeEnv(discrete.DiscreteEnv):
                                 ))
                         else:
                             li.append((
-                                1., *update_probability_matrix(row, col, a)
+                                1.0, *update_probability_matrix(row, col, a)
                             ))
 
         super(FrozenLakeEnv, self).__init__(nS, nA, P, isd)
