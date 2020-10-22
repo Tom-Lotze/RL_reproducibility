@@ -4,6 +4,7 @@
 # @Last Modified by:   TomLotze
 # @Last Modified time: 2020-10-22 18:38
 
+import numpy as np
 
 def value_iter_q(env, theta=0.0001, discount_factor=0.95):
     """
