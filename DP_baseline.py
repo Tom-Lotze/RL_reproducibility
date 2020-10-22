@@ -6,7 +6,7 @@
 
 import numpy as np
 
-def value_iter_q(env, theta=0.0001, discount_factor=0.95):
+def value_iter_q(env, theta=0.0001, discount_factor=0.99):
     """
     Q-value Iteration Algorithm.
 
@@ -38,9 +38,9 @@ def value_iter_q(env, theta=0.0001, discount_factor=0.95):
                     action_value += prob * (reward + discount_factor * next_state_value)
 
                 # update the action value in Q
-                if action_value > 1:
-                    print(action_value)
-                    breakpoint()
+                # if action_value > 1:
+                #     print(action_value)
+                #     breakpoint()
                 Q[state][action] = action_value
                 # check if there were any changes in the last loop
                 delta = max(delta, abs(old_value - action_value))
